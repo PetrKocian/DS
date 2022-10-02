@@ -1,6 +1,6 @@
 #
 # *** Demo 3
-# Create N backend nodes and 1 frontend node working as a load-balancer.
+# Create N NODE nodes and 1 frontend node working as a load-balancer.
 #
 
 VAGRANTFILE_API_VERSION = "2"
@@ -19,16 +19,16 @@ unless Vagrant.has_plugin?("vagrant-docker-compose")
 end
 
 # Names of Docker images built:
-BACKEND_IMAGE  = "ds/demo-3/backend:0.1"
+NODE_IMAGE  = "ds/task1/node:0.1"
 
 # Node definitions
-BACKENDS  = { :nameprefix => "backend-",  # backend nodes get names: backend-1, backend-2, etc.
+NODES  = { :nameprefix => "node-",  # NODE nodes get names: NODE-1, NODE-2, etc.
               :subnet => "10.0.1.",
-              :ip_offset => 100,  # backend nodes get IP addresses: 10.0.1.101, .102, .103, etc
-              :image => BACKEND_IMAGE,
+              :ip_offset => 100,  # NODE nodes get IP addresses: 10.0.1.101, .102, .103, etc
+              :image => NODE_IMAGE,
               :port => 5000 }
-# Number of backends to start:
-BACKENDS_COUNT = 1
+# Number of NODEs to start:
+NODES_COUNT = 1
 
 # Common configuration
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
@@ -39,9 +39,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     trigger.ruby do |env, machine|
       # --- start of Ruby script ---
 
-      # Build image for backend nodes:
-      puts "Building backend node image:"
-      `docker build backend -t "#{BACKEND_IMAGE}"`
+      # Build image for NODE nodes:
+      puts "Building nodes images:"
+      `docker build backend -t "#{NODE_IMAGE}"`
       # --- end of Ruby script ---
     end
   end
@@ -49,16 +49,16 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.synced_folder ".", "/vagrant", type: "rsync", rsync__exclude: ".*/"
   config.ssh.insert_key = false
 
-  # Definition of N backends
-  (1..BACKENDS_COUNT).each do |i|
-    node_ip_addr = "#{BACKENDS[:subnet]}#{BACKENDS[:ip_offset] + i}"
-    node_name = "#{BACKENDS[:nameprefix]}#{i}"
-    # Definition of BACKEND
+  # Definition of N NODEs
+  (1..NODES_COUNT).each do |i|
+    node_ip_addr = "#{NODES[:subnet]}#{NODES[:ip_offset] + i}"
+    node_name = "#{NODES[:nameprefix]}#{i}"
+    # Definition of NODE
     config.vm.define node_name do |s|
       s.vm.network "private_network", ip: node_ip_addr
       s.vm.hostname = node_name
       s.vm.provider "docker" do |d|
-        d.image = BACKENDS[:image]
+        d.image = NODES[:image]
         d.name = node_name
         d.has_ssh = true
       end
