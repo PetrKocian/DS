@@ -9,19 +9,24 @@
 #include <errno.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #define PORT 1234
 #define BROADCAST "255.255.255.255"
 #define NUM_THREADS 10
 #define RAND 1000
 
-struct threadArgs{
+struct threadArgs
+{
   long listeningSocket;
   std::string reply = "";
 };
 
 void announceNumber(int random_nr)
 {
+
+  usleep(random_nr);
+
   int socketfd;
   std::string addr = BROADCAST;
   int broadcastEnable = 1;
@@ -29,7 +34,7 @@ void announceNumber(int random_nr)
 
   std::string msg = "election:" + std::to_string(random_nr);
 
-  std::cout << "message to send: " << msg << std::endl;
+  std::cout << "Message to send: " << msg << std::endl;
 
   auto iaddr = inet_addr(addr.c_str());
 
@@ -48,18 +53,18 @@ void announceNumber(int random_nr)
   servaddr.sin_port = htons(PORT);
   servaddr.sin_addr.s_addr = iaddr;
 
-  std::cout << "sending message" << std::endl;
+  std::cout << "Sending message" << std::endl;
 
   sendto(socketfd, msg.c_str(), msg.length(), 0, (sockaddr *)&servaddr, len);
 
-  std::cout << "message sent, closing socket" << std::endl;
+  std::cout << "Message sent, closing socket" << std::endl;
 
   close(socketfd);
 }
 
 void *waitForReply(void *arguments_in)
 {
-  threadArgs* arguments = (threadArgs*) arguments_in;
+  threadArgs *arguments = (threadArgs *)arguments_in;
   long listeningSocket = arguments->listeningSocket;
   char reply[1024];
   struct sockaddr_in receiveSockaddr;
@@ -88,18 +93,24 @@ std::string broadcastListen()
   if (status == -1)
   {
     std::cout << "Bind error : " << strerror(errno) << "  " << errno << std::endl;
+    close(listeningSocket);
   }
 
-  while (1)
+  /*while (1)
   {
     pthread_create(&threads[i++], NULL, waitForReply, (void *)&arguments);
+    std::cout << "creating thread" << std::endl;
     // if there are already too many threads running, wait until they finish
     if (i >= NUM_THREADS)
     {
+      std::cout << "too many threads" << std::endl;
+
       i = 0;
       // wait for threads to finish once we reach 10, then start from 0 again
       while (i < NUM_THREADS)
       {
+        std::cout << "waiting for threads: " << i << std::endl;
+
         // std::cout << "Waiting for thread: " << i << std::endl;
         pthread_join(threads[i++], NULL);
         std::cout << "thread: " << arguments.reply << std::endl;
@@ -107,6 +118,16 @@ std::string broadcastListen()
       }
       i = 0;
     }
+  }*/
+
+  char reply[1024];
+
+  struct sockaddr_in receiveSockaddr;
+  socklen_t receiveSockaddrLen = sizeof(receiveSockaddr);
+  while (1)
+  {
+    ssize_t result = recvfrom(listeningSocket, reply, 1024, 0, (struct sockaddr *)&receiveSockaddr, &receiveSockaddrLen);
+    std::cout << reply << std::endl;
   }
 
   return "";
