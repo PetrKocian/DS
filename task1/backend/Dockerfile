@@ -10,8 +10,8 @@ COPY program /opt/backend
 
 WORKDIR /opt/backend
 
-#RUN clang++ -o Test main.cpp
+RUN g++ --std=c++11 main.cpp
 
-#CMD ["./Test"]
+CMD /opt/backend/./a.out
 
 # EOF

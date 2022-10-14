@@ -28,7 +28,7 @@ NODES  = { :nameprefix => "node-",  # NODE nodes get names: NODE-1, NODE-2, etc.
               :image => NODE_IMAGE,
               :port => 5000 }
 # Number of NODEs to start:
-NODES_COUNT = 1
+NODES_COUNT = 2
 
 # Common configuration
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
