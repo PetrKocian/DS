@@ -8,86 +8,110 @@
 #include <cstring>
 #include <errno.h>
 #include <string.h>
+#include <pthread.h>
 
+#define PORT 1234
+#define BROADCAST "255.255.255.255"
+#define NUM_THREADS 10
+#define RAND 1000
 
-#define PORT    1234
-#define BROADCAST    "255.255.255.255"
+void announceNumber(int random_nr)
+{
+  int socketfd;
+  std::string addr = BROADCAST;
+  int broadcastEnable = 1;
+  int len = sizeof(sockaddr_in);
 
+  std::string msg = "election:" + std::to_string(random_nr);
 
-void announceNumber(){
-    int socketfd, rcv_ret;
-    std::string addr;
-    char reply[1024];
-    addr = BROADCAST;
-    int broadcastEnable=1;
-    int len = sizeof(sockaddr_in);
+  std::cout << "message to send: " << msg << std::endl;
 
+  auto iaddr = inet_addr(addr.c_str());
 
-    srand (time(NULL));
-    int random_nr = rand() % 100 + 1;
+  struct sockaddr_in servaddr;
 
-    std::string msg = "election:" + std::to_string(random_nr);
+  if ((socketfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+  {
+    std::cout << "Socket error : " << strerror(errno) << "  " << errno << std::endl;
+  }
 
-    std::cout << "message to send: " <<msg << std::endl;
+  int ret = setsockopt(socketfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
 
-    auto iaddr = inet_addr(addr.c_str());
+  memset(&servaddr, 0, sizeof(servaddr));
 
-    struct sockaddr_in servaddr;
+  servaddr.sin_family = AF_INET;
+  servaddr.sin_port = htons(PORT);
+  servaddr.sin_addr.s_addr = iaddr;
 
-    if((socketfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0){
-        std::cout << "Error creating socket";
-    }
+  std::cout << "sending message" << std::endl;
 
-    int ret=setsockopt(socketfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
+  sendto(socketfd, msg.c_str(), msg.length(), 0, (sockaddr *)&servaddr, len);
 
-    memset(&servaddr, 0, sizeof(servaddr));
-    memset(&reply, 0, sizeof(reply));
+  std::cout << "message sent, closing socket" << std::endl;
 
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(PORT);
-    servaddr.sin_addr.s_addr = iaddr;
-
-    std::cout << "sending message" << std::endl;
-
-    sendto(socketfd, msg.c_str(), msg.length(), 0, (sockaddr *)&servaddr, len);
-
-    std::cout << "message sent" << std::endl;
-    close(socketfd);
+  close(socketfd);
 }
 
+void *waitForReply(void *lisSocket)
+{
+  long socketlis = (long)lisSocket;
+  char reply[1024];
+  struct sockaddr_in receiveSockaddr;
+  socklen_t receiveSockaddrLen = sizeof(receiveSockaddr);
 
-std::string broadcastListen(){
-  std::cout << "listen" << std::endl;
-  int listeningSocket = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
- // bind the port
-    struct sockaddr_in sockaddr;
-        char reply[1024];
+  ssize_t result = recvfrom(socketlis, reply, 1024, 0, (struct sockaddr *)&receiveSockaddr, &receiveSockaddrLen);
 
-    memset(&sockaddr, 0, sizeof(sockaddr));
-    
-    sockaddr.sin_family = AF_INET;
-    sockaddr.sin_port = htons(1234);
-    sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    std::cout << "gonna bind" << std::endl;
-    int status = bind(listeningSocket, (struct sockaddr *)&sockaddr, sizeof(sockaddr));
-    if (status == -1) {
-            std::cout << "Error : " <<strerror(errno) << "  "<< errno <<std::endl;
-    }
-     // receive
-    struct sockaddr_in receiveSockaddr;
-    socklen_t receiveSockaddrLen = sizeof(receiveSockaddr);
-        std::cout << "gonna receive" << std::endl;
-
-    ssize_t result = recvfrom(listeningSocket, reply, 1024, 0, (struct sockaddr *)&receiveSockaddr, &receiveSockaddrLen);
-
-  std::cout << "happy" <<std::endl;
-  return reply;
+  std::cout << reply << std::endl;
 }
 
+std::string broadcastListen()
+{
+  pthread_t threads[NUM_THREADS];
+  int i = 0;
+  long listeningSocket = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  struct sockaddr_in sockaddr;
+  memset(&sockaddr, 0, sizeof(sockaddr));
 
+  sockaddr.sin_family = AF_INET;
+  sockaddr.sin_port = htons(PORT);
+  sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-int main() {
-    announceNumber();
-    broadcastListen();
-    return 0;
+  int status = bind(listeningSocket, (struct sockaddr *)&sockaddr, sizeof(sockaddr));
+  if (status == -1)
+  {
+    std::cout << "Bind error : " << strerror(errno) << "  " << errno << std::endl;
+  }
+  // receive
+  std::cout << "gonna receive" << std::endl;
+
+  while (1)
+  {
+    pthread_create(&threads[i++], NULL, waitForReply, (void *)listeningSocket);
+    // if there are already too many threads running, wait until they finish
+    if (i >= NUM_THREADS)
+    {
+      i = 0;
+      // wait for threads to finish once we reach 10, then start from 0 again
+      while (i < NUM_THREADS)
+      {
+        // std::cout << "Waiting for thread: " << i << std::endl;
+        pthread_join(threads[i++], NULL);
+        // std::cout << "Thread: " << i-1 << " finished" << std::endl;
+      }
+      i = 0;
+    }
+  }
+
+  return "";
+}
+
+int main()
+{
+
+  srand(time(NULL));
+  int random_nr = rand() % RAND + 1;
+
+  announceNumber(random_nr);
+  broadcastListen();
+  return 0;
 }

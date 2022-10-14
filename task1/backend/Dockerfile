@@ -10,7 +10,7 @@ COPY program /opt/backend
 
 WORKDIR /opt/backend
 
-RUN g++ --std=c++11 main.cpp
+RUN g++ -pthread --std=c++11 main.cpp
 
 CMD /opt/backend/./a.out
 
