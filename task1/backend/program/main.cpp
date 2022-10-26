@@ -102,6 +102,7 @@ void client(int random_nr)
     slave_init_mutex.lock();
     */
     slave = false;
+    init = true;
     int count = 0;
     timeout = false;
     msg = "ELECTION:" + std::to_string(random_nr) + '\0';
@@ -119,11 +120,10 @@ void client(int random_nr)
     // send broadcast, wait 30 seconds for reply
     while (init == true)
     {
-      std::cout << "BROADCAST and look for master"
-                << std::endl;
       sendto(socketfd, msg.c_str(), msg.length(), 0, (sockaddr *)&servaddr, len);
 
       ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&servaddr, &len);
+
       if (result > 0)
       {
         client_mutex.lock();
@@ -166,8 +166,6 @@ void client(int random_nr)
       servaddr.sin_port = htons(PORT);
       servaddr.sin_addr.s_addr = iaddr;
 
-      std::cout << "BROADCAST and wait for master"
-                << std::endl;
       sendto(socketfd, msg.c_str(), msg.length(), 0, (sockaddr *)&servaddr, len);
       ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&servaddr, &len);
       if (result > 0)
@@ -231,7 +229,7 @@ void watchdog(node slave)
   socket_mutex.lock();
   sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&slave.node_addr, receiveSockaddrLen);
   socket_mutex.unlock();
-  std::cout << "watchdog adding node: " << slave.node_nr << std::endl;
+  // std::cout << "watchdog adding node: " << slave.node_nr << std::endl;
   // add node to vector and increment color count
   node_vector_mutex.lock();
   if (slave.color == red)
@@ -271,8 +269,7 @@ void watchdog(node slave)
     }
     int_vector_mutex.unlock();
   }
-  std::cout << "node: " << slave.node_nr << " dead"
-            << std::endl;
+  // std::cout << "node: " << slave.node_nr << " dead"    << std::endl;
 
   // node dead, remove from vector
   node_vector_mutex.lock();
@@ -464,14 +461,12 @@ void server()
         // continue to listen
         continue;
       }
-      std::cout << "looking for ping " << str << std::endl;
       pos = str.find("PING:");
       if (pos != std::string::npos)
       {
         // ping
         std::string number_s = str.substr(pos + 5);
         int number_i = std::stoi(number_s);
-        std::cout << "found ping" << std::endl;
         int_vector_mutex.lock();
         nodes_int.push_back(number_i);
         int_vector_mutex.unlock();
