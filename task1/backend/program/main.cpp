@@ -24,6 +24,8 @@ int random_nr = 0;
 bool master = false;
 bool slave = false;
 bool master_dead = false;
+bool init = true;
+
 int reds = 0;
 int greens = 0;
 struct sockaddr_in receiveSockaddr;
@@ -92,17 +94,19 @@ void client(int random_nr)
 
   while (true)
   {
+    /*
     // check if not in master init phase
     master_init_mutex.lock();
     master_init_mutex.unlock();
     // slave init phase
     slave_init_mutex.lock();
+    */
     slave = false;
     int count = 0;
     timeout = false;
     msg = "ELECTION:" + std::to_string(random_nr) + '\0';
 
-    tv.tv_sec = 3;
+    tv.tv_sec = 5;
     setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
 
     std::cout << "SLAVE INIT BEG"
@@ -113,7 +117,7 @@ void client(int random_nr)
     servaddr.sin_addr.s_addr = iaddr;
 
     // send broadcast, wait 30 seconds for reply
-    while (timeout == false)
+    while (init == true)
     {
       std::cout << "BROADCAST and look for master"
                 << std::endl;
@@ -122,22 +126,61 @@ void client(int random_nr)
       ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&servaddr, &len);
       if (result > 0)
       {
-        std::cout << "SLAVE INIT END: becoming slave, received: " << reply << std::endl;
+        client_mutex.lock();
+        slave = true;
+        init = false;
+        /*
+        std::size_t pos = str.find("HELLO:");
+        if (pos != std::string::npos)
+        {
+          client_mutex.lock();
+        }
+        std::size_t pos = str.find("WELCOME:");
+        if (pos != std::string::npos)
+        {
+          usleep(10000000);
+        }*/
+        /*std::cout << "SLAVE INIT END: becoming slave, received: " << reply << std::endl;
         memset(&reply, 0, sizeof(reply));
         slave = true;
-        timeout = true;
+        timeout = true;*/
       }
       else
       {
         count++;
         if (count > 10)
         {
-          timeout = true;
-          std::cout << "error " << strerror(errno) << "  " << errno << std::endl;
-          std::cout << "SLAVE INIT END: becoming master, no reply"
-                    << std::endl;
+          slave = false;
+          init = false;
+          usleep(10000000);
+
+          // std::cout << "error " << strerror(errno) << "  " << errno << std::endl;
+          std::cout << "SLAVE INIT END: becoming master, no reply" << std::endl;
         }
       }
+    }
+
+    while (slave)
+    {
+      servaddr.sin_family = AF_INET;
+      servaddr.sin_port = htons(PORT);
+      servaddr.sin_addr.s_addr = iaddr;
+
+      std::cout << "BROADCAST and wait for master"
+                << std::endl;
+      sendto(socketfd, msg.c_str(), msg.length(), 0, (sockaddr *)&servaddr, len);
+      ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&servaddr, &len);
+      if (result > 0)
+      {
+        std::string str = reply;
+        std::size_t pos = str.find("WELCOME:");
+        if (pos != std::string::npos)
+        {
+          std::cout << "got WELCOME, becoming client" << std::endl;
+          break;
+        }
+      }
+      usleep(5000000);
     }
 
     tv.tv_sec = 30;
@@ -145,8 +188,8 @@ void client(int random_nr)
     if (slave)
     {
       // start slave phase -> lock client mutex before unlocking init mutex so that server init wont start
-      client_mutex.lock();
-      slave_init_mutex.unlock();
+      // client_mutex.lock();
+      // slave_init_mutex.unlock();
 
       // send ping periodically and check for color from master
       while (true)
@@ -172,14 +215,10 @@ void client(int random_nr)
         memset(&reply, 0, sizeof(reply));
 
         // sleep before next ping
-        usleep(10000000);
+        usleep(5000000);
       }
     }
-    else
-    {
-      // end slave init phase
-      slave_init_mutex.unlock();
-    }
+
     usleep(random_nr * 50);
   }
 }
@@ -192,6 +231,7 @@ void watchdog(node slave)
   socket_mutex.lock();
   sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&slave.node_addr, receiveSockaddrLen);
   socket_mutex.unlock();
+  std::cout << "watchdog adding node: " << slave.node_nr << std::endl;
   // add node to vector and increment color count
   node_vector_mutex.lock();
   if (slave.color == red)
@@ -272,26 +312,32 @@ void server()
   char reply[1024];
   std::string msg;
   long socketfd = 0;
+  std::vector<node> slaves;
 
   while (true)
   {
-    socketfd = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    socketfd_global = socketfd;
-
-    // wait for slave init to finish
-    slave_init_mutex.lock();
-    slave_init_mutex.unlock();
     // dont start master init if node became slave
     client_mutex.lock();
     client_mutex.unlock();
-    // master init phase
-    master_init_mutex.lock();
 
-    struct timeval tv;
-    tv.tv_sec = 120;
-    tv.tv_usec = 0;
-    setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
-
+    socketfd = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    socketfd_global = socketfd;
+    /*
+        // wait for slave init to finish
+        slave_init_mutex.lock();
+        slave_init_mutex.unlock();
+        // dont start master init if node became slave
+        client_mutex.lock();
+        client_mutex.unlock();
+        // master init phase
+        master_init_mutex.lock();
+    */
+    /*
+        struct timeval tv;
+        tv.tv_sec = 120;
+        tv.tv_usec = 0;
+        setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+    */
     sockaddr.sin_family = AF_INET;
     sockaddr.sin_port = htons(PORT);
     sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -303,12 +349,71 @@ void server()
       close(socketfd);
     }
 
+    while (init)
+    {
+      ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&receiveSockaddr, &receiveSockaddrLen);
+      if (result > 0)
+      {
+        std::string str = reply;
+        memset(&reply, 0, sizeof(reply));
+
+        std::size_t pos = str.find("ELECTION:");
+        if (pos != std::string::npos)
+        {
+          std::string number_s = str.substr(pos + 9);
+          int number_i = std::stoi(number_s);
+          if (number_i < random_nr)
+          {
+            // number is smaller, reply and keep listening
+            msg = "HELLO:" + std::to_string(random_nr);
+
+            socket_mutex.lock();
+
+            char buffer[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &receiveSockaddr.sin_addr, buffer, sizeof(buffer));
+
+            node slave_for_later;
+            slave_for_later.node_addr = receiveSockaddr;
+            slave_for_later.node_nr = number_i;
+            slaves.push_back(slave_for_later);
+
+            std::cout << "sending message back to addr: " << buffer << std::endl;
+            sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&receiveSockaddr, receiveSockaddrLen);
+            socket_mutex.unlock();
+          }
+          else
+          {
+            // number is bigger, can't become master -> stop server
+            slave == true;
+          }
+        }
+        pos = str.find("PING:");
+        if (pos != std::string::npos)
+        {
+          msg = "GOTCHA:" + std::to_string(random_nr);
+          socket_mutex.lock();
+          sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&receiveSockaddr, receiveSockaddrLen);
+          socket_mutex.unlock();
+        }
+      }
+    }
+
     while (slave == false)
     {
       if (!master)
       {
-        std::cout << "MASTER INIT BEG"
+        std::cout << "MASTER BEG"
                   << std::endl;
+      }
+      for (int j = 0; j < slaves.size(); j++)
+      {
+        node temp = slaves.at(j);
+        std::thread t = std::thread(watchdog, temp);
+        t.detach();
+      }
+      for (int j = 0; j < slaves.size(); j++)
+      {
+        slaves.erase(slaves.begin() + j);
       }
       ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&receiveSockaddr, &receiveSockaddrLen);
       if (result < 0)
@@ -359,13 +464,14 @@ void server()
         // continue to listen
         continue;
       }
+      std::cout << "looking for ping " << str << std::endl;
       pos = str.find("PING:");
-      if (pos != std::string::npos && master == true)
+      if (pos != std::string::npos)
       {
         // ping
         std::string number_s = str.substr(pos + 5);
         int number_i = std::stoi(number_s);
-
+        std::cout << "found ping" << std::endl;
         int_vector_mutex.lock();
         nodes_int.push_back(number_i);
         int_vector_mutex.unlock();
@@ -376,7 +482,7 @@ void server()
     }
     close(socketfd);
 
-    master_init_mutex.unlock();
+    // master_init_mutex.unlock();
 
     usleep(10000000);
   }
