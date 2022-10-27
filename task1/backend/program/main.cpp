@@ -223,13 +223,14 @@ void client(int random_nr)
 
 void watchdog(node slave)
 {
+  usleep(1000000);
   long socketfd = socketfd_global;
   std::string msg = "orange" + std::to_string(random_nr);
   slave.color = red;
   socket_mutex.lock();
   sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&slave.node_addr, receiveSockaddrLen);
   socket_mutex.unlock();
-  // std::cout << "watchdog adding node: " << slave.node_nr << std::endl;
+  std::cout << "watchdog adding node: " << slave.node_nr << std::endl;
   // add node to vector and increment color count
   node_vector_mutex.lock();
   if (slave.color == red)
@@ -309,7 +310,8 @@ void server()
   char reply[1024];
   std::string msg;
   long socketfd = 0;
-  std::vector<node> slaves;
+  std::vector<node> slaves_to_be;
+  std::vector<int> my_slaves;
 
   while (true)
   {
@@ -372,7 +374,7 @@ void server()
             node slave_for_later;
             slave_for_later.node_addr = receiveSockaddr;
             slave_for_later.node_nr = number_i;
-            slaves.push_back(slave_for_later);
+            slaves_to_be.push_back(slave_for_later);
 
             std::cout << "sending message back to addr: " << buffer << std::endl;
             sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&receiveSockaddr, receiveSockaddrLen);
@@ -402,15 +404,20 @@ void server()
         std::cout << "MASTER BEG"
                   << std::endl;
       }
-      for (int j = 0; j < slaves.size(); j++)
+      for (int j = 0; j < slaves_to_be.size(); j++)
       {
-        node temp = slaves.at(j);
-        std::thread t = std::thread(watchdog, temp);
-        t.detach();
+        node temp = slaves_to_be.at(j);
+        auto it = std::find(my_slaves.begin(), my_slaves.end(), temp.node_nr);
+        if (it == my_slaves.end())
+        {
+          my_slaves.push_back(temp.node_nr);
+          std::thread t = std::thread(watchdog, temp);
+          t.detach();
+        }
       }
-      for (int j = 0; j < slaves.size(); j++)
+      for (int j = 0; j < slaves_to_be.size(); j++)
       {
-        slaves.erase(slaves.begin() + j);
+        slaves_to_be.erase(slaves_to_be.begin() + j);
       }
       ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&receiveSockaddr, &receiveSockaddrLen);
       if (result < 0)
@@ -454,8 +461,13 @@ void server()
           node slave;
           slave.node_addr = receiveSockaddr;
           slave.node_nr = number_i;
-          std::thread t = std::thread(watchdog, slave);
-          t.detach();
+          auto it = std::find(my_slaves.begin(), my_slaves.end(), slave.node_nr);
+          if (it == my_slaves.end())
+          {
+            my_slaves.push_back(slave.node_nr);
+            std::thread t = std::thread(watchdog, slave);
+            t.detach();
+          }
         }
 
         // continue to listen
