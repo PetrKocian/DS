@@ -27,7 +27,7 @@ bool master_dead = false;
 bool init = true;
 
 int reds = 0;
-int greens = 0;
+int greens = 1;
 struct sockaddr_in receiveSockaddr;
 socklen_t receiveSockaddrLen = sizeof(receiveSockaddr);
 long socketfd_global;
@@ -44,6 +44,7 @@ std::mutex master_init_mutex;
 std::mutex master_dead_mutex;
 std::mutex server_mutex;
 std::mutex client_mutex;
+std::mutex color_mutex;
 
 #include <chrono>
 
@@ -110,8 +111,7 @@ void client(int random_nr)
     tv.tv_sec = 5;
     setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
 
-    std::cout << "SLAVE INIT BEG"
-              << std::endl;
+    std::cout << "SLAVE INIT BEG" << std::endl;
 
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(PORT);
@@ -129,21 +129,6 @@ void client(int random_nr)
         client_mutex.lock();
         slave = true;
         init = false;
-        /*
-        std::size_t pos = str.find("HELLO:");
-        if (pos != std::string::npos)
-        {
-          client_mutex.lock();
-        }
-        std::size_t pos = str.find("WELCOME:");
-        if (pos != std::string::npos)
-        {
-          usleep(10000000);
-        }*/
-        /*std::cout << "SLAVE INIT END: becoming slave, received: " << reply << std::endl;
-        memset(&reply, 0, sizeof(reply));
-        slave = true;
-        timeout = true;*/
       }
       else
       {
@@ -154,7 +139,6 @@ void client(int random_nr)
           init = false;
           usleep(10000000);
 
-          // std::cout << "error " << strerror(errno) << "  " << errno << std::endl;
           std::cout << "SLAVE INIT END: becoming master, no reply" << std::endl;
         }
       }
@@ -185,10 +169,6 @@ void client(int random_nr)
     setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
     if (slave)
     {
-      // start slave phase -> lock client mutex before unlocking init mutex so that server init wont start
-      // client_mutex.lock();
-      // slave_init_mutex.unlock();
-
       // send ping periodically and check for color from master
       while (true)
       {
@@ -225,22 +205,57 @@ void watchdog(node slave)
 {
   usleep(1000000);
   long socketfd = socketfd_global;
-  std::string msg = "orange" + std::to_string(random_nr);
+  std::string msg;
   slave.color = red;
-  socket_mutex.lock();
-  sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&slave.node_addr, receiveSockaddrLen);
-  socket_mutex.unlock();
+  bool slave_green = false;
   std::cout << "watchdog adding node: " << slave.node_nr << std::endl;
   // add node to vector and increment color count
   node_vector_mutex.lock();
-  if (slave.color == red)
+
+  color_mutex.lock();
+
+  int total = greens + reds + 1;
+  int desired_greens;
+  std::cout << "total: " << total << " reds " << reds << " greens " << greens << std::endl;
+
+  if (total % 3 == 0)
   {
-    reds++;
+    desired_greens = total / 3;
+    if (greens == desired_greens)
+    {
+      slave_green = false;
+    }
+    else
+    {
+      slave_green = true;
+    }
   }
-  else if (slave.color == green)
+  else
   {
+    desired_greens = (total + 3) / 3;
+    if (greens == desired_greens)
+    {
+      slave_green = false;
+    }
+    else
+    {
+      slave_green = true;
+    }
+  }
+
+  if (slave_green)
+  {
+    slave.color = green;
     greens++;
   }
+  else
+  {
+    slave.color = red;
+    reds++;
+  }
+
+  color_mutex.unlock();
+
   nodes.push_back(slave);
   node_vector_mutex.unlock();
 
@@ -248,14 +263,29 @@ void watchdog(node slave)
   bool alive = true;
   while (alive)
   {
+    for (int i = 0; i < nodes.size(); i++)
+    {
+      if (nodes.at(i).node_nr == slave.node_nr)
+      {
+        slave = nodes.at(i);
+        break;
+      }
+    }
     usleep(15000000);
     // check if node has pinged since last time
+    if (slave.color == green)
+    {
+      msg = "GREEN" + std::to_string(slave.node_nr);
+    }
+    else if (slave.color == red)
+    {
+      msg = "RED" + std::to_string(slave.node_nr);
+    }
     int_vector_mutex.lock();
     auto it = std::find(nodes_int.begin(), nodes_int.end(), slave.node_nr);
     if (it != nodes_int.end())
     {
-      std::cout << "node: " << slave.node_nr << " alive"
-                << std::endl;
+      std::cout << "node: " << slave.node_nr << " alive and " << slave.color << std::endl;
       // node alive - erase from ping vector
 
       socket_mutex.lock();
@@ -270,7 +300,8 @@ void watchdog(node slave)
     }
     int_vector_mutex.unlock();
   }
-  // std::cout << "node: " << slave.node_nr << " dead"    << std::endl;
+  
+  std::cout << "node: " << slave.node_nr << " dead"    << std::endl;
 
   // node dead, remove from vector
   node_vector_mutex.lock();
@@ -280,24 +311,87 @@ void watchdog(node slave)
   {
     if (nodes.at(i).node_nr == slave.node_nr)
     {
-      break;
       found = true;
+      break;
     }
   }
   if (found)
   {
-    if (slave.color == red && reds > 0)
+    std::cout << "erasing node: " << slave.node_nr << std::endl;
+    if (slave.color == red)
     {
       reds--;
     }
-    else if (slave.color == green & greens > 0)
+    else if (slave.color == green)
     {
       greens--;
     }
     nodes.erase(nodes.begin() + i);
-    if (nodes.empty())
+
+    int total = greens + reds;
+    int desired_greens;
+    bool make_green = false;
+    bool make_red = false;
+    std::cout << "total " << total << " greens " << greens << " reds " << reds << std::endl;
+    if (total % 3 == 0)
     {
-      master = false;
+      desired_greens = total / 3;
+      std::cout << "desired greens " << desired_greens << std::endl;
+
+      if (greens < desired_greens)
+      {
+        make_green = true;
+        std::cout << "make green" << std::endl;
+      }
+      else if (greens > desired_greens)
+      {
+        make_red = true;
+        std::cout << "make red" << std::endl;
+      }
+    }
+    else
+    {
+      desired_greens = (total + 3) / 3;
+      std::cout << "desired greens " << desired_greens << std::endl;
+
+      if (greens < desired_greens)
+      {
+        make_green = true;
+        std::cout << "make green" << std::endl;
+      }
+      else if (greens > desired_greens)
+      {
+        make_red = true;
+        std::cout << "make red" << std::endl;
+      }
+    }
+    if (make_green)
+    {
+      for (i = 0; i < nodes.size(); i++)
+      {
+        if (nodes.at(i).color == red)
+        {
+          std::cout << "found red node: " << nodes.at(i).node_nr << std::endl;
+          nodes.at(i).color = green;
+          std::cout << "node new color " << nodes.at(i).color << std::endl;
+
+          break;
+        }
+      }
+    }
+    else if (make_red)
+    {
+      for (i = 0; i < nodes.size(); i++)
+      {
+        if (nodes.at(i).color == green)
+        {
+          std::cout << "found green node: " << nodes.at(i).node_nr << std::endl;
+          nodes.at(i).color = red;
+          std::cout << "node new color " << nodes.at(i).color << std::endl;
+
+          break;
+        }
+      }
     }
   }
   node_vector_mutex.unlock();
@@ -321,22 +415,7 @@ void server()
 
     socketfd = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
     socketfd_global = socketfd;
-    /*
-        // wait for slave init to finish
-        slave_init_mutex.lock();
-        slave_init_mutex.unlock();
-        // dont start master init if node became slave
-        client_mutex.lock();
-        client_mutex.unlock();
-        // master init phase
-        master_init_mutex.lock();
-    */
-    /*
-        struct timeval tv;
-        tv.tv_sec = 120;
-        tv.tv_usec = 0;
-        setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
-    */
+   
     sockaddr.sin_family = AF_INET;
     sockaddr.sin_port = htons(PORT);
     sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
