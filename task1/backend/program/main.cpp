@@ -19,48 +19,31 @@
 #define BROADCAST "255.255.255.255"
 #define RAND 1000000
 
+// enables additional print statements
 #define DEBUG 0
 
 int random_nr = 0;
 bool master = false;
 bool slave = false;
-bool master_dead = false;
 bool init = true;
 
-int reds = 0;
-int greens = 1;
-struct sockaddr_in receiveSockaddr;
-socklen_t receiveSockaddrLen = sizeof(receiveSockaddr);
 long socketfd_global;
+
+// mutexes for thread sync and writing to shared resources
+std::mutex node_vector_mutex;
+std::mutex int_vector_mutex;
+std::mutex socket_mutex;
+std::mutex client_mutex;
+std::mutex color_mutex;
+std::mutex log_mutex; //mutex for std::cout so that watchdog threads don't mix messages in logs
+
 enum colors
 {
   red = 0,
   green = 1
 };
-std::mutex node_vector_mutex;
-std::mutex int_vector_mutex;
-std::mutex socket_mutex;
-std::mutex slave_init_mutex;
-std::mutex master_init_mutex;
-std::mutex master_dead_mutex;
-std::mutex server_mutex;
-std::mutex client_mutex;
-std::mutex color_mutex;
-std::mutex log_mutex;
-
-#include <chrono>
-
-using sysclock_t = std::chrono::system_clock;
-
-std::string CurrentDate()
-{
-  std::time_t now = sysclock_t::to_time_t(sysclock_t::now());
-
-  char buf[16] = {0};
-  std::strftime(buf, sizeof(buf), "%T", std::localtime(&now));
-
-  return std::string(buf);
-}
+int reds = 0;
+int greens = 1; // master is green
 
 struct node
 {
@@ -68,6 +51,7 @@ struct node
   int node_nr;
   struct sockaddr_in node_addr;
 };
+
 std::vector<node> nodes = {};
 std::vector<int> nodes_int = {};
 
@@ -81,14 +65,13 @@ void client(int random_nr)
   std::string msg = "ELECTION:" + std::to_string(random_nr) + '\0';
   auto iaddr = inet_addr(addr.c_str());
   struct sockaddr_in servaddr;
-  bool timeout = false;
   master = false;
 
+  // socket creation and settings - broadcast and timeout
   if ((socketfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
   {
     std::cout << "Socket error: " << strerror(errno) << "  " << errno << std::endl;
   }
-
   int ret = setsockopt(socketfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable));
   struct timeval tv;
   tv.tv_sec = 30;
@@ -96,38 +79,43 @@ void client(int random_nr)
   setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
   memset(&servaddr, 0, sizeof(servaddr));
 
+  // init and client loop, once a node becomes master it stays master forever -> client thread ends
   while (master == false)
   {
-    slave = false;
-    init = true;
-    int count = 0;
-    timeout = false;
-    msg = "ELECTION:" + std::to_string(random_nr) + '\0';
-
-    tv.tv_sec = 5;
-    setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
 #if (DEBUG)
     std::cout << "SLAVE INIT BEG" << std::endl;
 #endif
+
+    slave = false;
+    init = true;
+    int count = 0;
+    msg = "ELECTION:" + std::to_string(random_nr) + '\0';
+
+    // decrease timeout settings
+    tv.tv_sec = 5;
+    setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(PORT);
     servaddr.sin_addr.s_addr = iaddr;
 
-    // send broadcast, wait 30 seconds for reply
+    // init loop
     while (init == true)
     {
+      // send broadcast and wait for reply
       sendto(socketfd, msg.c_str(), msg.length(), 0, (sockaddr *)&servaddr, len);
-
       ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&servaddr, &len);
 
+      // reply received -> there is a node with higher number, end init and become slave
       if (result > 0)
       {
         memset(&reply, 0, sizeof(reply));
+        // lock client mutex to block server/master thread
         client_mutex.lock();
         std::cout << "INIT end, becoming slave" << std::endl;
         slave = true;
         init = false;
       }
+      // timeout -> send another broadcast and wait until 10 timeouts, then become master
       else
       {
         count++;
@@ -142,6 +130,7 @@ void client(int random_nr)
       }
     }
 
+    // wait in this loop until master is decided
     while (slave)
     {
       servaddr.sin_family = AF_INET;
@@ -166,6 +155,7 @@ void client(int random_nr)
       usleep(5000000);
     }
 
+    // increase timeout settings
     tv.tv_sec = 30;
     setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
     if (slave)
@@ -182,7 +172,7 @@ void client(int random_nr)
         ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&servaddr, &len);
         if (result < 0)
         {
-          // master didnt reply, slave is free -> unlock mutex
+          // master didnt reply, slave is free -> unlock client mutex
           std::cout << "Master dead, start INIT" << std::endl;
           client_mutex.unlock();
           break;
@@ -191,6 +181,7 @@ void client(int random_nr)
         {
           std::string str = reply;
           std::size_t pos = str.find("WELCOME:");
+          // ignore WELCOME messages for other slaves and print my color
           if (pos == std::string::npos)
           {
             std::cout << "I'm: " << reply << std::endl;
@@ -202,32 +193,35 @@ void client(int random_nr)
         usleep(5000000);
       }
     }
-
+    // sleep before next init based on random_nr
     usleep(random_nr * 50);
   }
 }
 
 void watchdog(node slave)
 {
+  // sleep to allow master to create all watchdogs in first iteration of master loop
   usleep(1000000);
   long socketfd = socketfd_global;
+  socklen_t receiveSockaddrLen = sizeof(slave.node_addr);
   std::string msg;
   slave.color = red;
   bool slave_green = false;
 #if (DEBUG)
   std::cout << "watchdog adding node: " << slave.node_nr << std::endl;
 #endif
-  // add node to vector and increment color count
+  // lock shared resources
   node_vector_mutex.lock();
-
   color_mutex.lock();
 
+  // total is +1 because this slave is not accounted for yet
   int total = greens + reds + 1;
   int desired_greens;
 #if (DEBUG)
   std::cout << "total: " << total << " reds " << reds << " greens " << greens << std::endl;
 #endif
 
+  // compute desired number of green nodes and make node green if higher than now green nodes
   if (total % 3 == 0)
   {
     desired_greens = total / 3;
@@ -252,36 +246,28 @@ void watchdog(node slave)
       slave_green = true;
     }
   }
-
+  // increment color counts, add node to vector and release mutexes
   if (slave_green)
   {
     slave.color = green;
+    msg = "GREEN ";
     greens++;
   }
   else
   {
     slave.color = red;
+    msg = "RED ";
     reds++;
   }
-
   color_mutex.unlock();
-
   nodes.push_back(slave);
   node_vector_mutex.unlock();
 
-  if (slave.color == green)
-  {
-    msg = "GREEN ";
-  }
-  else if (slave.color == red)
-  {
-    msg = "RED ";
-  }
-
+  //log print
   log_mutex.lock();
   std::cout << "Adding slave: " << slave.node_nr << " color: " << msg << std::endl;
   log_mutex.unlock();
-
+  //send first message to slave
   socket_mutex.lock();
   sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&slave.node_addr, receiveSockaddrLen);
   socket_mutex.unlock();
@@ -290,6 +276,7 @@ void watchdog(node slave)
   bool alive = true;
   while (alive)
   {
+    //need to update node info
     for (int i = 0; i < nodes.size(); i++)
     {
       if (nodes.at(i).node_nr == slave.node_nr)
@@ -298,8 +285,7 @@ void watchdog(node slave)
         break;
       }
     }
-    usleep(15000000);
-    // check if node has pinged since last time
+    //print node info
     if (slave.color == green)
     {
       msg = "GREEN";
@@ -314,12 +300,14 @@ void watchdog(node slave)
       std::cout << "Slave: " << slave.node_nr << " alive and RED" << std::endl;
       log_mutex.unlock();
     }
+
+    usleep(15000000);
+    // check if node has pinged since last time
     int_vector_mutex.lock();
     auto it = std::find(nodes_int.begin(), nodes_int.end(), slave.node_nr);
     if (it != nodes_int.end())
     {
-      // node alive - erase from ping vector
-
+      // node alive - erase from ping vector and send message with its color
       socket_mutex.lock();
       sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&slave.node_addr, receiveSockaddrLen);
       socket_mutex.unlock();
@@ -334,11 +322,10 @@ void watchdog(node slave)
   }
 
   log_mutex.lock();
-  std::cout
-      << "Slave: " << slave.node_nr << " DEAD" << std::endl;
+  std::cout << "Slave: " << slave.node_nr << " DEAD" << std::endl;
   log_mutex.unlock();
 
-  // node dead, remove from vector
+  // node dead, remove from vector and decrease color count
   node_vector_mutex.lock();
   int i = 0;
   bool found = false;
@@ -365,6 +352,7 @@ void watchdog(node slave)
     }
     nodes.erase(nodes.begin() + i);
 
+    //need to check if color ratio has been disrupted
     int total = greens + reds;
     int desired_greens;
     bool make_green = false;
@@ -416,6 +404,7 @@ void watchdog(node slave)
 #endif
       }
     }
+    // if color change is needed, find node in vector and change its color -> its watchdog will send it update with next ping
     if (make_green)
     {
       for (i = 0; i < nodes.size(); i++)
@@ -450,6 +439,8 @@ void watchdog(node slave)
 
 void server()
 {
+  struct sockaddr_in receiveSockaddr;
+  socklen_t receiveSockaddrLen = sizeof(receiveSockaddr);
   struct sockaddr_in sockaddr;
   memset(&sockaddr, 0, sizeof(sockaddr));
   char reply[1024];
@@ -460,17 +451,16 @@ void server()
 
   while (true)
   {
-    // dont start master init if node became slave
+    // dont start master loop if node became slave
     client_mutex.lock();
     client_mutex.unlock();
 
+    //socket creation and bind
     socketfd = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
     socketfd_global = socketfd;
-
     sockaddr.sin_family = AF_INET;
     sockaddr.sin_port = htons(PORT);
     sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-
     int status = bind(socketfd, (struct sockaddr *)&sockaddr, sizeof(sockaddr));
     if (status == -1)
     {
@@ -478,6 +468,7 @@ void server()
       close(socketfd);
     }
 
+    //init loop - client thread sets init = 0 when init phase ends
     while (init)
     {
       ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&receiveSockaddr, &receiveSockaddrLen);
@@ -485,7 +476,7 @@ void server()
       {
         std::string str = reply;
         memset(&reply, 0, sizeof(reply));
-
+        //if message is election -> check node random_nr size
         std::size_t pos = str.find("ELECTION:");
         if (pos != std::string::npos)
         {
@@ -493,7 +484,7 @@ void server()
           int number_i = std::stoi(number_s);
           if (number_i < random_nr)
           {
-            // number is smaller, reply and keep listening
+            // number is smaller, save node as slave, reply and keep listening
             msg = "HELLO:" + std::to_string(random_nr);
 
             socket_mutex.lock();
@@ -514,10 +505,11 @@ void server()
           }
           else
           {
-            // number is bigger, can't become master -> stop server
+            // number is bigger, this node can't become master -> stop master loop
             slave == true;
           }
         }
+        // if message is ping, reply to node to keep it from timing out
         pos = str.find("PING:");
         if (pos != std::string::npos)
         {
@@ -528,9 +520,10 @@ void server()
         }
       }
     }
-
+    //main master loop
     while (slave == false)
     {
+      //create 1 watchdog thread for each slave
       for (int j = 0; j < slaves_to_be.size(); j++)
       {
         node temp = slaves_to_be.at(j);
@@ -542,17 +535,16 @@ void server()
           t.detach();
         }
       }
+      //clear slaves_to_be to prevent watchdog duplication in next loop iterations
       for (int j = 0; j < slaves_to_be.size(); j++)
       {
         slaves_to_be.erase(slaves_to_be.begin() + j);
       }
+
       ssize_t result = recvfrom(socketfd, reply, 1024, 0, (struct sockaddr *)&receiveSockaddr, &receiveSockaddrLen);
       if (result < 0)
       {
-// stop master init phase if no reply received in 120 seconds -> unlock mutex
-#if (DEBUG)
-        std::cout << "MASTER INIT END: no election msg received" << std::endl;
-#endif
+        //break loop on recvfrom error
         break;
       }
 #if (DEBUG)
@@ -560,16 +552,16 @@ void server()
 #endif
       std::string str = reply;
       memset(&reply, 0, sizeof(reply));
-
+      //check for new nodes
       std::size_t pos = str.find("ELECTION:");
       if (pos != std::string::npos)
       {
-        // first contact with master
+        // new node - first contact with master
         std::string number_s = str.substr(pos + 9);
         int number_i = std::stoi(number_s);
         if (number_i != random_nr)
         {
-          msg = "WELCOME:" + std::to_string(random_nr) + '\0';
+          msg = "WELCOME:" + std::to_string(random_nr);
 
           socket_mutex.lock();
 
@@ -582,6 +574,7 @@ void server()
           sendto(socketfd, msg.c_str(), msg.length(), 0, (struct sockaddr *)&receiveSockaddr, receiveSockaddrLen);
           socket_mutex.unlock();
 
+          //create slave watchdog if not yet in my slaves
           node slave;
           slave.node_addr = receiveSockaddr;
           slave.node_nr = number_i;
@@ -593,32 +586,31 @@ void server()
             t.detach();
           }
         }
-
         // continue to listen
         continue;
       }
+      //check for ping from slaves
       pos = str.find("PING:");
       if (pos != std::string::npos)
       {
-        // ping
+        // ping -> add node to ping vector, watchdog then reads and removes it
         std::string number_s = str.substr(pos + 5);
         int number_i = std::stoi(number_s);
         int_vector_mutex.lock();
         nodes_int.push_back(number_i);
         int_vector_mutex.unlock();
-
         // continue to listen
         continue;
       }
     }
     close(socketfd);
-
     usleep(10000000);
   }
 }
 
 int main()
 {
+  //init random number, start client and server thread, then wait in infinite loop
   srand(time(NULL));
   random_nr = rand() % RAND;
   std::cout << std::endl
