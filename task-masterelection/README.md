@@ -44,3 +44,15 @@ To read logs from the nodes use portainer or command
 ```
 vagrant docker-logs
 ```
+
+
+## Testing
+
+Master election can be tested just by running the application. New master election can be tested by stopping the master node container, color change can be tested by breaking the color ratio by stopping a color node container.
+
+Here are log snippets of some common scenarios:
+
+#### Master log
+#### Slave log
+#### Master dead
+#### Master dead + color change
