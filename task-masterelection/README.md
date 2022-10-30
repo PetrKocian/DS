@@ -53,10 +53,17 @@ Master election can be tested just by running the application. New master electi
 Here are log snippets of some common scenarios:
 
 #### Master log
+
 <img src="img/node2-master.png">
+
 #### Slave log
+
 <img src="img/node1.png">
+
 #### Master dead
+
 <img src="img/masterdead.png">
+
 #### Master dead + color change
+
 <img src="img/colorchange.png">
