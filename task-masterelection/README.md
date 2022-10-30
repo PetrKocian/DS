@@ -7,4 +7,14 @@ Each node is assigned a random number which it then broadcasts to other nodes in
 ### Failure detector
 Master creates a watchdog thread for each slave node, which checks if the node is alive and sends it its color. At the start of the watchdog thread, desired node color is computed and then send to the slave node periodically. When a node pings master, master writes its number to a vector, which the watchdog threads checks in defined intervals. If a node number isn't in the vector, its watchdog thread knows the node is dead and exits. When a watchdog thread ends, it recomputes color ratio and updates colors for other nodes accordingly.
 ### Color computation
-The colors computation is explained in the following pseudo code snippet.
+The colors computation is explained in the following pseudo code snippet. 1/3 of the nodes should be green and 2/3 should be red, number of green nodes is rounded up.
+```
+if(total%3 == 0)
+{
+    greens = total/3;
+}
+else
+{
+    greens = (total+3)/3
+}
+```
