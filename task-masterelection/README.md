@@ -6,7 +6,7 @@ This repository contains source code for both DS task 1 and 2. Task 1 was to imp
 Each node is assigned a random number which it then broadcasts to other nodes in the network. When a node receives a broadcast with higher node number than its own or a reply to its broadcast, it stops listening for broadcast messages and waits for WELCOME message from master. If a node doesn't receive a reply to its broadcast before a timeout then it means it has the highest number in the network -> it becomes master. If a node with higher number joins the network after master is elected, it becomes a slave node, therefore, a node with the highest number doesn't have to be the master.
 
 <p>
-    <img src="img/control_flow.png">
+    <img src="img/control_flow.png" alt>
     <em>On the left: slave thread, on the right: master thread</em>
 </p>
 
