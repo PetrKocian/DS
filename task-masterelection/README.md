@@ -21,3 +21,23 @@ else
     greens = (total+3)/3
 }
 ```
+
+
+## Build and run
+To run the application use the command
+```
+vagrant up
+```
+inside the folder where Vagrantfile is located.
+
+For setting up the number of nodes change the 
+```
+NODES_COUNT = 5
+```
+inside Vagrantfile to desired number.
+
+
+To read logs from the nodes use portainer or command 
+```
+vagrant docker-logs
+```
