@@ -9,6 +9,7 @@ The nodes communicate with each other using UDP and the communication with Zooke
 When the root is started it creates a root zoonode at Zookeeper and then starts listening for incoming requests. Each node then sends a request to root to obtain its parent address. The root contacts Zookeeper, creates a new zoonode there corresponding to the node and then replies to the node with its new parent address.
 
 ### OpenAPI
+<img src="images/openapi.png">
 
 
 
@@ -34,5 +35,8 @@ vagrant docker-logs
 ## Testing
 
 There is a simple python script included in the ***utils*** folder. Here is an example of the script usage
+
+<img src="images/compy.png">
+
 
 The structure of the cache binary tree can be checked using **ZooNavigator** at http://localhost:9000
