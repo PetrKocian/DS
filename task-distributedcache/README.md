@@ -2,7 +2,7 @@
 This repository contains source code for DS task 3. The goal of task 3 was to implement distributed cache structured as a binary tree and use zookeeper nodes to record the structure of the binary tree.
 
 ## Implementation
-The program is partly implemented in C++ and Python. Python is used because of the **KazooClient** library, as it was introduced in the KIV/DS course.
+The program is partly implemented in C++ and Python. Python is used because of the **KazooClient** library, as it was introduced in the KIV/DS course. Docker is used to run the nodes and Vagrant is used to set up the Docker nodes. The dockerfile doesn't use multi-stage build due to time constraints of the project implementation, but it would be preferable to reduce the size of the Docker images.
 
 The nodes communicate with each other using UDP and the communication with Zookeeper is realized through embedded Python in C++. Only the root communicates with Zookeeper.
 
